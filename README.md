@@ -2,9 +2,9 @@
 
 A standalone GitHub-compatible git forge: git smart HTTP, REST v3 API, GraphQL, and MCP — served from its own store by a single process. No UI, no outside service.
 
-[![github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01)
-[![rank](https://make.fun/badge/github-core-clone-01/Vaniaa98/ironforge/rank.svg)](https://make.fun/bounty/github-core-clone-01)
-[![reward](https://make.fun/badge/github-core-clone-01/reward.svg)](https://make.fun/bounty/github-core-clone-01)
+[![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/Vaniaa98/ironforge/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/Vaniaa98/ironforge/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 
 Built for the [make.fun bounty "Build a GitHub-compatible git forge"](https://make.fun/bounty/github-core-clone-01).
 
