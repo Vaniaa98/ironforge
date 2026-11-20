@@ -9,11 +9,20 @@
 // with the env, and answers every request itself.
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const binary = join(dir, 'forge');
+
+// A binary committed via the web UI loses its exec bit (mode 100644), so the
+// launcher makes it executable itself before spawning it.
+try {
+  chmodSync(binary, 0o755);
+} catch {
+  // Already executable, or a read-only checkout — spawn anyway.
+}
 
 const child: ChildProcess = spawn(binary, [], {
   stdio: 'inherit',
