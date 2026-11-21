@@ -265,6 +265,8 @@ func (g *GitRepo) UpdateRef(ref, newSHA string) (bool, string) {
 		}
 		delete(g.Refs, ref)
 		g.PackValid = false
+		g.Rev++
+		g.FetchCache = nil
 		return true, ""
 	}
 	if _, ok := g.Objects[newSHA]; !ok {
@@ -274,6 +276,8 @@ func (g *GitRepo) UpdateRef(ref, newSHA string) (bool, string) {
 	if !exists {
 		g.Refs[ref] = newSHA
 		g.PackValid = false
+		g.Rev++
+		g.FetchCache = nil
 		return true, ""
 	}
 	if cur == newSHA {
@@ -284,6 +288,8 @@ func (g *GitRepo) UpdateRef(ref, newSHA string) (bool, string) {
 	}
 	g.Refs[ref] = newSHA
 	g.PackValid = false
+	g.Rev++
+	g.FetchCache = nil
 	return true, ""
 }
 
@@ -1034,7 +1040,7 @@ func parseFetchArgs(payloads [][]byte) fetchArgs {
 
 // writeV2FetchPack writes a v2 fetch response: acknowledgments (NAK),
 // optional shallow-info, and the packfile section (sideband band 1).
-func writeV2FetchPack(w http.ResponseWriter, pack []byte, shallow, unshallow []string) {
+func buildV2FetchPack(pack []byte, shallow, unshallow []string) []byte {
 	var out bytes.Buffer
 	out.Write(pktLineStr("acknowledgments\n"))
 	out.Write(pktLineStr("NAK\n"))
@@ -1052,7 +1058,11 @@ func writeV2FetchPack(w http.ResponseWriter, pack []byte, shallow, unshallow []s
 	out.Write(pktLineStr("packfile\n"))
 	out.Write(sidebandWrap(pack))
 	out.Write(pktFlush)
-	writeGitResponse(w, "application/x-git-upload-pack-result", out.Bytes())
+	return out.Bytes()
+}
+
+func writeV2FetchPack(w http.ResponseWriter, pack []byte, shallow, unshallow []string) {
+	writeGitResponse(w, "application/x-git-upload-pack-result", buildV2FetchPack(pack, shallow, unshallow))
 }
 
 // writeV2FetchError answers a fetch whose want is unknown with a sideband
@@ -1069,12 +1079,46 @@ func writeV2FetchError(w http.ResponseWriter, err error) {
 	writeGitResponse(w, "application/x-git-upload-pack-result", out.Bytes())
 }
 
+// fetchCacheKey identifies a v2 fetch request: the response is a pure
+// function of the repo state at a given Rev plus these arguments.
+func fetchCacheKey(args fetchArgs) string {
+	hd := "0"
+	if args.hasDepth {
+		hd = "1"
+	}
+	return "w=" + strings.Join(args.wants, ",") + "|d=" + strconv.Itoa(args.depth) + "|hd=" + hd +
+		"|h=" + strings.Join(args.haves, ",") + "|s=" + strings.Join(args.shallow, ",")
+}
+
+// fetchCacheStore records a response built at revision rev. A mutation
+// between the read lock and this write lock bumps Rev (and clears the map),
+// so a stale computation is never stored.
+func (g *GitRepo) fetchCacheStore(s *Store, key string, resp []byte, rev uint64) {
+	s.mu.Lock()
+	if g.Rev == rev {
+		if g.FetchCache == nil {
+			g.FetchCache = make(map[string][]byte)
+		}
+		g.FetchCache[key] = resp
+	}
+	s.mu.Unlock()
+}
+
 // handleFetchV2 answers a v2 command=fetch. A full clone (no haves, no
 // depth, every tip wanted) is served from the cached full pack, built once.
+// Any fetch whose response was already built at the current revision is
+// served from the fetch-response cache instead of re-planning + re-encoding.
 func handleFetchV2(w http.ResponseWriter, s *Store, rep *Repo, payloads [][]byte) {
 	args := parseFetchArgs(payloads)
+	key := fetchCacheKey(args)
 	s.mu.RLock()
 	g := rep.Git
+	if b, ok := g.FetchCache[key]; ok {
+		s.mu.RUnlock()
+		writeGitResponse(w, "application/x-git-upload-pack-result", b)
+		return
+	}
+	rev := g.Rev
 	fullClone := len(args.haves) == 0 && !args.hasDepth && len(args.shallow) == 0 && wantsCoverAllTips(g, args.wants)
 	if fullClone {
 		if !g.PackValid {
@@ -1085,13 +1129,22 @@ func handleFetchV2(w http.ResponseWriter, s *Store, rep *Repo, payloads [][]byte
 				g.PackValid = true
 			}
 			pack := g.PackCache
+			resp := buildV2FetchPack(pack, nil, nil)
+			if g.Rev == rev {
+				if g.FetchCache == nil {
+					g.FetchCache = make(map[string][]byte)
+				}
+				g.FetchCache[key] = resp
+			}
 			s.mu.Unlock()
-			writeV2FetchPack(w, pack, nil, nil)
+			writeGitResponse(w, "application/x-git-upload-pack-result", resp)
 			return
 		}
 		pack := g.PackCache
+		resp := buildV2FetchPack(pack, nil, nil)
 		s.mu.RUnlock()
-		writeV2FetchPack(w, pack, nil, nil)
+		g.fetchCacheStore(s, key, resp, rev)
+		writeGitResponse(w, "application/x-git-upload-pack-result", resp)
 		return
 	}
 	plan, err := g.planFetch(args.wants, args.haves, args.shallow, args.depth, args.hasDepth)
@@ -1101,9 +1154,10 @@ func handleFetchV2(w http.ResponseWriter, s *Store, rep *Repo, payloads [][]byte
 		return
 	}
 	pack := encodePack(plan.objects)
-	shallow, unshallow := plan.shallow, plan.unshallow
+	resp := buildV2FetchPack(pack, plan.shallow, plan.unshallow)
 	s.mu.RUnlock()
-	writeV2FetchPack(w, pack, shallow, unshallow)
+	g.fetchCacheStore(s, key, resp, rev)
+	writeGitResponse(w, "application/x-git-upload-pack-result", resp)
 }
 
 // handleFetchV0 answers a v0 fetch (want/have/done): NAK, shallow lines,

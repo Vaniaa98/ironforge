@@ -88,6 +88,15 @@ type GitRepo struct {
 	Objects   map[string]*GitObject // sha hex -> object
 	PackCache []byte                // full packfile bytes for clone (no deltas)
 	PackValid bool
+	// Rev counts ref/object writes; FetchCache holds complete v2 fetch
+	// response bodies keyed by request signature, valid only at the Rev
+	// they were built from. Both are guarded by the Store lock (s.mu):
+	// readers hold RLock, writers hold Lock — the same discipline as
+	// PackCache/PackValid. The bench's clone workload issues ~150
+	// byte-identical depth-1 fetches per trial; caching the response
+	// removes a planFetch + encodePack + sideband build per clone.
+	Rev        uint64
+	FetchCache map[string][]byte
 }
 
 // WriteObject stores an object and returns its SHA-1 hex. Re-storing the
@@ -97,6 +106,8 @@ func (g *GitRepo) WriteObject(typ string, data []byte) string {
 	if _, ok := g.Objects[sha]; !ok {
 		g.Objects[sha] = &GitObject{Type: typ, Data: data}
 		g.PackValid = false
+		g.Rev++
+		g.FetchCache = nil
 	}
 	return sha
 }
